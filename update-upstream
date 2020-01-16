@@ -1,0 +1,6 @@
+#!/bin/sh
+
+json=$(go env GOROOT)/src/encoding/json
+cp -rf "$json/"* .
+
+sed -i 's!"internal/testenv"!"zgo.at/json/internal/testenv"!' *_test.go

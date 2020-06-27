@@ -1,0 +1,133 @@
+commit c29c05e
+Author: Martin Tournoij <martin@arp242.net>
+Date:   Sat Jun 27 12:20:45 2020 +0800
+
+    Apply readonly patch
+
+diff --git decode.go decode.go
+index b60e2bb..9715766 100644
+--- decode.go
++++ decode.go
+@@ -213,6 +213,7 @@ type decodeState struct {
+ 	savedError            error
+ 	useNumber             bool
+ 	disallowUnknownFields bool
++	allowReadonlyFields   bool
+ 	// safeUnquote is the number of current string literal bytes that don't
+ 	// need to be unquoted. When negative, no bytes need unquoting.
+ 	safeUnquote int
+@@ -699,6 +700,7 @@ func (d *decodeState) object(v reflect.Value) error {
+ 		// Figure out field corresponding to key.
+ 		var subv reflect.Value
+ 		destring := false // whether the value is wrapped in a string to be decoded first
++		readOnly := false // ,readonly tag
+ 
+ 		if v.Kind() == reflect.Map {
+ 			elemType := t.Elem()
+@@ -727,6 +729,9 @@ func (d *decodeState) object(v reflect.Value) error {
+ 			if f != nil {
+ 				subv = v
+ 				destring = f.quoted
++				if !d.allowReadonlyFields {
++					readOnly = f.readOnly
++				}
+ 				for _, i := range f.index {
+ 					if subv.Kind() == reflect.Ptr {
+ 						if subv.IsNil() {
+@@ -765,7 +770,9 @@ func (d *decodeState) object(v reflect.Value) error {
+ 		}
+ 		d.scanWhile(scanSkipSpace)
+ 
+-		if destring {
++		if readOnly {
++			_ = d.value(reflect.Value{})
++		} else if destring {
+ 			switch qv := d.valueQuoted().(type) {
+ 			case nil:
+ 				if err := d.literalStore(nullLiteral, subv, false); err != nil {
+diff --git decode_test.go decode_test.go
+index a49181e..c8cc9a5 100644
+--- decode_test.go
++++ decode_test.go
+@@ -2460,3 +2460,46 @@ func TestUnmarshalRescanLiteralMangledUnquote(t *testing.T) {
+ 		t.Errorf("Marshal and Unmarshal roundtrip mismatch: want %q got %q", t1, t2)
+ 	}
+ }
++
++func TestReadonly(t *testing.T) {
++	type nested struct {
++		RO string `json:"ro,readonly"`
++		RW string `json:"rw"`
++	}
++
++	type foo struct {
++		RO     string `json:"ro,readonly"`
++		RW     string `json:"rw"`
++		Nested nested `json:"nested"`
++	}
++
++	f := foo{"hello", "hello", nested{"hello", "hello"}}
++	data := `{"ro": "XXXXX", "rw": "XXXXX", "nested": {"ro": "XXXXX", "rw": "XXXXX"}}`
++
++	t.Run("unmarshal", func(t *testing.T) {
++		want := foo{"hello", "XXXXX", nested{"hello", "XXXXX"}}
++		err := Unmarshal([]byte(data), &f)
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		if !reflect.DeepEqual(f, want) {
++			t.Errorf("\ngot:  %#v\nwant: %#v", f, want)
++		}
++	})
++
++	t.Run("allowReadonlyFields", func(t *testing.T) {
++		want := foo{"XXXXX", "XXXXX", nested{"XXXXX", "XXXXX"}}
++		d := NewDecoder(strings.NewReader(data))
++		d.AllowReadonlyFields()
++		err := d.Decode(&f)
++
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		if !reflect.DeepEqual(f, want) {
++			t.Errorf("\ngot:  %#v\nwant: %#v", f, want)
++		}
++	})
++}
+diff --git encode.go encode.go
+index b351cf3..ec10410 100644
+--- encode.go
++++ encode.go
+@@ -1154,6 +1154,7 @@ type field struct {
+ 	typ       reflect.Type
+ 	omitEmpty bool
+ 	quoted    bool
++	readOnly  bool
+ 
+ 	encoder encoderFunc
+ }
+@@ -1269,6 +1270,7 @@ func typeFields(t reflect.Type) structFields {
+ 						index:     index,
+ 						typ:       ft,
+ 						omitEmpty: opts.Contains("omitempty"),
++						readOnly:  opts.Contains("readonly"),
+ 						quoted:    quoted,
+ 					}
+ 					field.nameBytes = []byte(field.name)
+diff --git stream.go stream.go
+index 81f404f..692bd2f 100644
+--- stream.go
++++ stream.go
+@@ -41,6 +41,10 @@ func (dec *Decoder) UseNumber() { dec.d.useNumber = true }
+ // non-ignored, exported fields in the destination.
+ func (dec *Decoder) DisallowUnknownFields() { dec.d.disallowUnknownFields = true }
+ 
++// AllowReadonlyFields causes the Decoder to allow settings fields with the
++// ,readonly tag.
++func (dec *Decoder) AllowReadonlyFields() { dec.d.allowReadonlyFields = true }
++
+ // Decode reads the next JSON-encoded value from its
+ // input and stores it in the value pointed to by v.
+ //

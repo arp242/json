@@ -41,6 +41,10 @@ func (dec *Decoder) UseNumber() { dec.d.useNumber = true }
 // non-ignored, exported fields in the destination.
 func (dec *Decoder) DisallowUnknownFields() { dec.d.disallowUnknownFields = true }
 
+// AllowReadonlyFields causes the Decoder to allow settings fields with the
+// ,readonly tag.
+func (dec *Decoder) AllowReadonlyFields() { dec.d.allowReadonlyFields = true }
+
 // Decode reads the next JSON-encoded value from its
 // input and stores it in the value pointed to by v.
 //

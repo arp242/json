@@ -1154,6 +1154,7 @@ type field struct {
 	typ       reflect.Type
 	omitEmpty bool
 	quoted    bool
+	readOnly  bool
 
 	encoder encoderFunc
 }
@@ -1269,6 +1270,7 @@ func typeFields(t reflect.Type) structFields {
 						index:     index,
 						typ:       ft,
 						omitEmpty: opts.Contains("omitempty"),
+						readOnly:  opts.Contains("readonly"),
 						quoted:    quoted,
 					}
 					field.nameBytes = []byte(field.name)

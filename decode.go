@@ -200,23 +200,23 @@ func (n Number) Int64() (int64, error) {
 	return strconv.ParseInt(string(n), 10, 64)
 }
 
+// An errorContext provides context for type errors during decoding.
+type errorContext struct {
+	Struct     reflect.Type
+	FieldStack []string
+}
+
 // decodeState represents the state while decoding a JSON value.
 type decodeState struct {
-	data         []byte
-	off          int // next read offset in data
-	opcode       int // last read result
-	scan         scanner
-	errorContext struct { // provides context for type errors
-		Struct     reflect.Type
-		FieldStack []string
-	}
+	data                  []byte
+	off                   int // next read offset in data
+	opcode                int // last read result
+	scan                  scanner
+	errorContext          *errorContext
 	savedError            error
 	useNumber             bool
 	disallowUnknownFields bool
 	allowReadonlyFields   bool
-	// safeUnquote is the number of current string literal bytes that don't
-	// need to be unquoted. When negative, no bytes need unquoting.
-	safeUnquote int
 }
 
 // readIndex returns the position of the last byte read.
@@ -233,10 +233,11 @@ func (d *decodeState) init(data []byte) *decodeState {
 	d.data = data
 	d.off = 0
 	d.savedError = nil
-	d.errorContext.Struct = nil
-
-	// Reuse the allocated space for the FieldStack slice.
-	d.errorContext.FieldStack = d.errorContext.FieldStack[:0]
+	if d.errorContext != nil {
+		d.errorContext.Struct = nil
+		// Reuse the allocated space for the FieldStack slice.
+		d.errorContext.FieldStack = d.errorContext.FieldStack[:0]
+	}
 	return d
 }
 
@@ -250,12 +251,11 @@ func (d *decodeState) saveError(err error) {
 
 // addErrorContext returns a new error enhanced with information from d.errorContext
 func (d *decodeState) addErrorContext(err error) error {
-	if d.errorContext.Struct != nil || len(d.errorContext.FieldStack) > 0 {
+	if d.errorContext != nil && (d.errorContext.Struct != nil || len(d.errorContext.FieldStack) > 0) {
 		switch err := err.(type) {
 		case *UnmarshalTypeError:
 			err.Struct = d.errorContext.Struct.Name()
 			err.Field = strings.Join(d.errorContext.FieldStack, ".")
-			return err
 		}
 	}
 	return err
@@ -318,27 +318,13 @@ func (d *decodeState) rescanLiteral() {
 Switch:
 	switch data[i-1] {
 	case '"': // string
-		// safeUnquote is initialized at -1, which means that all bytes
-		// checked so far can be unquoted at a later time with no work
-		// at all. When reaching the closing '"', if safeUnquote is
-		// still -1, all bytes can be unquoted with no work. Otherwise,
-		// only those bytes up until the first '\\' or non-ascii rune
-		// can be safely unquoted.
-		safeUnquote := -1
 		for ; i < len(data); i++ {
-			if c := data[i]; c == '\\' {
-				if safeUnquote < 0 { // first unsafe byte
-					safeUnquote = int(i - d.off)
-				}
+			switch data[i] {
+			case '\\':
 				i++ // escaped char
-			} else if c == '"' {
-				d.safeUnquote = safeUnquote
+			case '"':
 				i++ // tokenize the closing quote too
 				break Switch
-			} else if c >= utf8.RuneSelf {
-				if safeUnquote < 0 { // first unsafe byte
-					safeUnquote = int(i - d.off)
-				}
 			}
 		}
 	case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-': // number
@@ -675,7 +661,10 @@ func (d *decodeState) object(v reflect.Value) error {
 	}
 
 	var mapElem reflect.Value
-	origErrorContext := d.errorContext
+	var origErrorContext errorContext
+	if d.errorContext != nil {
+		origErrorContext = *d.errorContext
+	}
 
 	for {
 		// Read opening " of string key or closing }.
@@ -692,7 +681,7 @@ func (d *decodeState) object(v reflect.Value) error {
 		start := d.readIndex()
 		d.rescanLiteral()
 		item := d.data[start:d.readIndex()]
-		key, ok := d.unquoteBytes(item)
+		key, ok := unquoteBytes(item)
 		if !ok {
 			panic(phasePanicMsg)
 		}
@@ -753,6 +742,9 @@ func (d *decodeState) object(v reflect.Value) error {
 						subv = subv.Elem()
 					}
 					subv = subv.Field(i)
+				}
+				if d.errorContext == nil {
+					d.errorContext = new(errorContext)
 				}
 				d.errorContext.FieldStack = append(d.errorContext.FieldStack, f.name)
 				d.errorContext.Struct = t
@@ -836,11 +828,13 @@ func (d *decodeState) object(v reflect.Value) error {
 		if d.opcode == scanSkipSpace {
 			d.scanWhile(scanSkipSpace)
 		}
-		// Reset errorContext to its original state.
-		// Keep the same underlying array for FieldStack, to reuse the
-		// space and avoid unnecessary allocs.
-		d.errorContext.FieldStack = d.errorContext.FieldStack[:len(origErrorContext.FieldStack)]
-		d.errorContext.Struct = origErrorContext.Struct
+		if d.errorContext != nil {
+			// Reset errorContext to its original state.
+			// Keep the same underlying array for FieldStack, to reuse the
+			// space and avoid unnecessary allocs.
+			d.errorContext.FieldStack = d.errorContext.FieldStack[:len(origErrorContext.FieldStack)]
+			d.errorContext.Struct = origErrorContext.Struct
+		}
 		if d.opcode == scanEndObject {
 			break
 		}
@@ -899,7 +893,7 @@ func (d *decodeState) literalStore(item []byte, v reflect.Value, fromQuoted bool
 			d.saveError(&UnmarshalTypeError{Value: val, Type: v.Type(), Offset: int64(d.readIndex())})
 			return nil
 		}
-		s, ok := d.unquoteBytes(item)
+		s, ok := unquoteBytes(item)
 		if !ok {
 			if fromQuoted {
 				return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
@@ -950,7 +944,7 @@ func (d *decodeState) literalStore(item []byte, v reflect.Value, fromQuoted bool
 		}
 
 	case '"': // string
-		s, ok := d.unquoteBytes(item)
+		s, ok := unquoteBytes(item)
 		if !ok {
 			if fromQuoted {
 				return fmt.Errorf("json: invalid use of ,string struct tag, trying to unmarshal %q into %v", item, v.Type())
@@ -1110,7 +1104,7 @@ func (d *decodeState) objectInterface() map[string]interface{} {
 		start := d.readIndex()
 		d.rescanLiteral()
 		item := d.data[start:d.readIndex()]
-		key, ok := d.unquote(item)
+		key, ok := unquote(item)
 		if !ok {
 			panic(phasePanicMsg)
 		}
@@ -1159,7 +1153,7 @@ func (d *decodeState) literalInterface() interface{} {
 		return c == 't'
 
 	case '"': // string
-		s, ok := d.unquote(item)
+		s, ok := unquote(item)
 		if !ok {
 			panic(phasePanicMsg)
 		}
@@ -1202,33 +1196,40 @@ func getu4(s []byte) rune {
 
 // unquote converts a quoted JSON string literal s into an actual string t.
 // The rules are different than for Go, so cannot use strconv.Unquote.
-// The first byte in s must be '"'.
-func (d *decodeState) unquote(s []byte) (t string, ok bool) {
-	s, ok = d.unquoteBytes(s)
+func unquote(s []byte) (t string, ok bool) {
+	s, ok = unquoteBytes(s)
 	t = string(s)
 	return
 }
 
-func (d *decodeState) unquoteBytes(s []byte) (t []byte, ok bool) {
-	// We already know that s[0] == '"'. However, we don't know that the
-	// closing quote exists in all cases, such as when the string is nested
-	// via the ",string" option.
-	if len(s) < 2 || s[len(s)-1] != '"' {
+func unquoteBytes(s []byte) (t []byte, ok bool) {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
 		return
 	}
 	s = s[1 : len(s)-1]
 
-	// If there are no unusual characters, no unquoting is needed, so return
-	// a slice of the original bytes.
-	r := d.safeUnquote
-	if r == -1 {
+	// Check for unusual characters. If there are none,
+	// then no unquoting is needed, so return a slice of the
+	// original bytes.
+	r := 0
+	for r < len(s) {
+		c := s[r]
+		if c == '\\' || c == '"' || c < ' ' {
+			break
+		}
+		if c < utf8.RuneSelf {
+			r++
+			continue
+		}
+		rr, size := utf8.DecodeRune(s[r:])
+		if rr == utf8.RuneError && size == 1 {
+			break
+		}
+		r += size
+	}
+	if r == len(s) {
 		return s, true
 	}
-	// Only perform up to one safe unquote for each re-scanned string
-	// literal. In some edge cases, the decoder unquotes a literal a second
-	// time, even after another literal has been re-scanned. Thus, only the
-	// first unquote can safely use safeUnquote.
-	d.safeUnquote = 0
 
 	b := make([]byte, len(s)+2*utf8.UTFMax)
 	w := copy(b, s[0:r])

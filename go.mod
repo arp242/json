@@ -1,3 +1,3 @@
 module zgo.at/json
 
-go 1.14
+go 1.19

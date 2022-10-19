@@ -14,7 +14,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
-	"zgo.at/json/internal/testenv"
 	"io"
 	"os"
 	"reflect"
@@ -22,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"zgo.at/json/internal/testenv"
 )
 
 type codeResponse struct {
@@ -192,7 +193,7 @@ func BenchmarkDecoderStream(b *testing.B) {
 	var buf bytes.Buffer
 	dec := NewDecoder(&buf)
 	buf.WriteString(`"` + strings.Repeat("x", 1000000) + `"` + "\n\n\n")
-	var x interface{}
+	var x any
 	if err := dec.Decode(&x); err != nil {
 		b.Fatal("Decode:", err)
 	}

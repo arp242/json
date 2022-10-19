@@ -2572,3 +2572,46 @@ func TestUnmarshalMaxDepth(t *testing.T) {
 		}
 	}
 }
+
+func TestReadonly(t *testing.T) {
+	type nested struct {
+		RO string `json:"ro,readonly"`
+		RW string `json:"rw"`
+	}
+
+	type foo struct {
+		RO     string `json:"ro,readonly"`
+		RW     string `json:"rw"`
+		Nested nested `json:"nested"`
+	}
+
+	f := foo{"hello", "hello", nested{"hello", "hello"}}
+	data := `{"ro": "XXXXX", "rw": "XXXXX", "nested": {"ro": "XXXXX", "rw": "XXXXX"}}`
+
+	t.Run("unmarshal", func(t *testing.T) {
+		want := foo{"hello", "XXXXX", nested{"hello", "XXXXX"}}
+		err := Unmarshal([]byte(data), &f)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(f, want) {
+			t.Errorf("\ngot:  %#v\nwant: %#v", f, want)
+		}
+	})
+
+	t.Run("allowReadonlyFields", func(t *testing.T) {
+		want := foo{"XXXXX", "XXXXX", nested{"XXXXX", "XXXXX"}}
+		d := NewDecoder(strings.NewReader(data))
+		d.AllowReadonlyFields()
+		err := d.Decode(&f)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(f, want) {
+			t.Errorf("\ngot:  %#v\nwant: %#v", f, want)
+		}
+	})
+}

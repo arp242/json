@@ -217,6 +217,7 @@ type decodeState struct {
 	savedError            error
 	useNumber             bool
 	disallowUnknownFields bool
+	allowReadonlyFields   bool
 }
 
 // readIndex returns the position of the last byte read.
@@ -689,6 +690,7 @@ func (d *decodeState) object(v reflect.Value) error {
 		// Figure out field corresponding to key.
 		var subv reflect.Value
 		destring := false // whether the value is wrapped in a string to be decoded first
+		readOnly := false // ,readonly tag
 
 		if v.Kind() == reflect.Map {
 			elemType := t.Elem()
@@ -717,6 +719,9 @@ func (d *decodeState) object(v reflect.Value) error {
 			if f != nil {
 				subv = v
 				destring = f.quoted
+				if !d.allowReadonlyFields {
+					readOnly = f.readOnly
+				}
 				for _, i := range f.index {
 					if subv.Kind() == reflect.Pointer {
 						if subv.IsNil() {
@@ -758,7 +763,9 @@ func (d *decodeState) object(v reflect.Value) error {
 		}
 		d.scanWhile(scanSkipSpace)
 
-		if destring {
+		if readOnly {
+			_ = d.value(reflect.Value{})
+		} else if destring {
 			switch qv := d.valueQuoted().(type) {
 			case nil:
 				if err := d.literalStore(nullLiteral, subv, false); err != nil {

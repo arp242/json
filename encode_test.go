@@ -1201,3 +1201,43 @@ func TestMarshalerError(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeNullArray(t *testing.T) {
+	have := new(bytes.Buffer)
+
+	{
+		s := struct {
+			Slice1 []string
+			Slice2 []string
+			Bytes1 []byte
+			Bytes2 []byte
+		}{Slice2: []string{"XXX"}, Bytes2: []byte("XXX")}
+		err := NewEncoder(have).Encode(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if have.String() != `{"Slice1":null,"Slice2":["XXX"],"Bytes1":null,"Bytes2":"WFhY"}`+"\n" {
+			t.Error(have)
+		}
+	}
+
+	{
+		have.Reset()
+		s := struct {
+			Slice1 []string
+			Slice2 []string
+			Bytes1 []byte
+			Bytes2 []byte
+		}{Slice2: []string{"XXX"}, Bytes2: []byte("XXX")}
+		enc := NewEncoder(have)
+		enc.NullArray(false)
+		err := enc.Encode(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if have.String() != `{"Slice1":[],"Slice2":["XXX"],"Bytes1":"","Bytes2":"WFhY"}`+"\n" {
+			t.Error(have)
+		}
+	}
+
+}

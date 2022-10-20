@@ -157,7 +157,7 @@ import (
 func Marshal(v any) ([]byte, error) {
 	e := newEncodeState()
 
-	err := e.marshal(v, encOpts{escapeHTML: true})
+	err := e.marshal(v, encOpts{escapeHTML: true, nullArray: true})
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +364,8 @@ type encOpts struct {
 	quoted bool
 	// escapeHTML causes '<', '>', and '&' to be escaped in JSON strings.
 	escapeHTML bool
+	// Encode nil arrays as null.
+	nullArray bool
 }
 
 type encoderFunc func(e *encodeState, v reflect.Value, opts encOpts)
@@ -830,8 +832,8 @@ func newMapEncoder(t reflect.Type) encoderFunc {
 	return me.encode
 }
 
-func encodeByteSlice(e *encodeState, v reflect.Value, _ encOpts) {
-	if v.IsNil() {
+func encodeByteSlice(e *encodeState, v reflect.Value, opts encOpts) {
+	if v.IsNil() && opts.nullArray {
 		e.WriteString("null")
 		return
 	}
@@ -866,7 +868,7 @@ type sliceEncoder struct {
 }
 
 func (se sliceEncoder) encode(e *encodeState, v reflect.Value, opts encOpts) {
-	if v.IsNil() {
+	if v.IsNil() && opts.nullArray {
 		e.WriteString("null")
 		return
 	}

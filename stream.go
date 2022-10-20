@@ -186,6 +186,7 @@ type Encoder struct {
 	w          io.Writer
 	err        error
 	escapeHTML bool
+	nullArray  bool
 
 	indentBuf    *bytes.Buffer
 	indentPrefix string
@@ -194,7 +195,7 @@ type Encoder struct {
 
 // NewEncoder returns a new encoder that writes to w.
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w: w, escapeHTML: true}
+	return &Encoder{w: w, escapeHTML: true, nullArray: true}
 }
 
 // Encode writes the JSON encoding of v to the stream,
@@ -207,7 +208,7 @@ func (enc *Encoder) Encode(v any) error {
 		return enc.err
 	}
 	e := newEncodeState()
-	err := e.marshal(v, encOpts{escapeHTML: enc.escapeHTML})
+	err := e.marshal(v, encOpts{escapeHTML: enc.escapeHTML, nullArray: enc.nullArray})
 	if err != nil {
 		return err
 	}
@@ -257,6 +258,11 @@ func (enc *Encoder) SetIndent(prefix, indent string) {
 func (enc *Encoder) SetEscapeHTML(on bool) {
 	enc.escapeHTML = on
 }
+
+// NullArray sets if the encoder should encode a nil slice to a JSON "null" (the
+// default behaviour). When disabled a nil slice is encoded to "[]", and a nil
+// []byte slice to "".
+func (enc *Encoder) NullArray(on bool) { enc.nullArray = on }
 
 // RawMessage is a raw encoded JSON value.
 // It implements Marshaler and Unmarshaler and can
